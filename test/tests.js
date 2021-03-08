@@ -43,6 +43,12 @@ var test_terminal = {
     },
     inst_U: function () {
         this.calls.push(['dcs unhook']);
+    },
+    ss2: function(value) {
+        this.calls.push(['ss2', value]);
+    },
+    ss3: function(value) {
+        this.calls.push(['ss3', value]);
     }
 };
 
@@ -194,8 +200,8 @@ describe('state transitions and actions', function() {
     it('trans ESCAPE --> GROUND with ecs_dispatch action', function () {
         parser.reset();
         test_terminal.clear();
-        var dispatches = r(0x30, 0x50);
-        dispatches.concat(r(0x51, 0x58));
+        var dispatches = r(0x30, 0x4d);
+        dispatches.concat(r(0x50, 0x58));
         dispatches.concat(['\x59', '\x5a', '\x5c']);
         dispatches.concat(r(0x60, 0x7f));
         for (var i=0; i<dispatches.length; ++i) {
@@ -1033,5 +1039,27 @@ describe('error tests', function() {
         ]);
         parser.reset();
         test_terminal.clear();
+    });
+});
+
+describe('Input parsing', function() {
+
+    it('emacs session', function() {
+        const transcript = '\r\remavs\b\bcs\r\x1b[>0;10;1c\x18\x06\x1bOB\x1bOB'; // \x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\x1bOB\r\x1b>\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOA\x1bOB\x05 \x01\x05\x1bOB\x1bOA\x01\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1b[1;2C\x1bw\x1bOB\x19\x1f\x18\x03nyes\r\x04;
+        test(transcript, [
+            ['exe', '\r'],
+            ['exe', '\r'],
+            ['print', 'emavs'],
+            ['exe', '\b'],
+            ['exe', '\b'],
+            ['print', 'cs'],
+            ['exe', '\r'],
+            ['csi', '>', [0, 10, 1], 'c'],
+            ['exe', '\x18'],
+            ['exe', '\x06'],
+            ['ss3', 66],
+            ['ss3', 66]
+        ]);
+
     });
 });

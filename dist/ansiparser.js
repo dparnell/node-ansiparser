@@ -26,7 +26,7 @@
      * @param {number=} next - next state
      */
     function add(table, inp, state, action, next) {
-        table[state<<8|inp] = ((action | 0) << 4) | ((next === undefined) ? state : next);
+        table[state<<8|inp] = ((action | 0) << 8) | ((next === undefined) ? state : next);
     }
 
     /**
@@ -44,51 +44,56 @@
     }
 
     /** global definition of printables and executables */
-    var PRINTABLES = r(0x20, 0x7f);
+    var PRINTABLES = r(0x20, 0x7F);
     var EXECUTABLES = r(0x00, 0x18);
     EXECUTABLES.push(0x19);
     EXECUTABLES.concat(r(0x1c, 0x20));
 
     /* meaning of state and action indices
-        var STATES = [
-            'GROUND',
-            'ESCAPE',
-            'ESCAPE_INTERMEDIATE',
-            'CSI_ENTRY',
-            'CSI_PARAM',
-            'CSI_INTERMEDIATE',
-            'CSI_IGNORE',
-            'SOS_PM_APC_STRING',
-            'OSC_STRING',
-            'DCS_ENTRY',
-            'DCS_PARAM',
-            'DCS_IGNORE',
-            'DCS_INTERMEDIATE',
-            'DCS_PASSTHROUGH'
-        ];
-        var ACTIONS = [
-            'ignore',
-            'error',
-            'print',
-            'execute',
-            'osc_start',
-            'osc_put',
-            'osc_end',
-            'csi_dispatch',
-            'param',
-            'collect',
-            'esc_dispatch',
-            'clear',
-            'dcs_hook',
-            'dcs_put',
-            'dcs_unhook'
-        ];
-     */
+       var STATES = [
+       'GROUND',
+       'ESCAPE',
+       'ESCAPE_INTERMEDIATE',
+       'CSI_ENTRY',
+       'CSI_PARAM',
+       'CSI_INTERMEDIATE',
+       'CSI_IGNORE',
+       'SOS_PM_APC_STRING',
+       'OSC_STRING',
+       'DCS_ENTRY',
+       'DCS_PARAM',
+       'DCS_IGNORE',
+       'DCS_INTERMEDIATE',
+       'DCS_PASSTHROUGH',
+       'SS2',
+       'SS3'
+       ];
+
+       var ACTIONS = [
+       'ignore',
+       'error',
+       'print',
+       'execute',
+       'osc_start',
+       'osc_put',
+       'osc_end',
+       'csi_dispatch',
+       'param',
+       'collect',
+       'esc_dispatch',
+       'clear',
+       'dcs_hook',
+       'dcs_put',
+       'dcs_unhook',
+       'ss2',
+       'ss3'
+       ];
+    */
 
     /**
      * create the standard transition table - used by all parser instances
      *
-     *     table[state << 8 | character code] = action << 4 | next state
+     *     table[state << 8 | character code] = action << 8 | next state
      *
      *     - states are indices of STATES (0 to 13)
      *     - control character codes defined from 0 to 159 (C0 and C1)
@@ -96,12 +101,12 @@
      *     - any higher character than 159 is handled by the 'error' action
      */
     var TRANSITION_TABLE = (function() {
-        var t = new Uint8Array(4095);
+        var t = new Uint16Array(4095);
 
         // table with default transition [any] --> [error, GROUND]
-        for (var state=0; state<14; ++state) {
+        for (var state=0; state<16; ++state) {
             for (var code=0; code<160; ++code) {
-                t[state<<8|code] = 16;
+                t[state<<8|code] = 0x100;
             }
         }
 
@@ -109,7 +114,7 @@
         // printables
         add_list(t, PRINTABLES, 0, 2);
         // global anywhere rules
-        for (state=0; state<14; ++state) {
+        for (state=0; state<16; ++state) {
             add_list(t, [0x18, 0x1a, 0x99, 0x9a], state, 3, 0);
             add_list(t, r(0x80, 0x90), state, 3, 0);
             add_list(t, r(0x90, 0x98), state, 3, 0);
@@ -134,6 +139,7 @@
         add(t, 0x7f, 5);
         add_list(t, EXECUTABLES, 2, 3);
         add(t, 0x7f, 2);
+
         // osc
         add(t, 0x5d, 1, 4, 8);
         add_list(t, PRINTABLES, 8, 5);
@@ -204,6 +210,12 @@
         add(t, 0x7f, 13);
         add_list(t, [0x1b, 0x9c], 13, 14, 0);
 
+        // rules for ss2 and ss3
+        add(t, 0x4e, 1, 0, 14);
+        add(t, 0x4f, 1, 0, 15);
+        add_list(t, PRINTABLES, 14, 15, 0);
+        add_list(t, PRINTABLES, 15, 16, 0);
+
         return t;
     })();
 
@@ -219,7 +231,7 @@
         this.current_state = this.initial_state|0;
 
         // clone global transition table
-        this.transitions = new Uint8Array(4095);
+        this.transitions = new Uint16Array(4095);
         this.transitions.set(TRANSITION_TABLE);
 
         // global non pushable buffers for multiple parse invocations
@@ -230,7 +242,8 @@
         // back reference to terminal
         this.term = terminal || {};
         var instructions = ['inst_p', 'inst_o', 'inst_x', 'inst_c',
-            'inst_e', 'inst_H', 'inst_P', 'inst_U', 'inst_E'];
+                            'inst_e', 'inst_H', 'inst_P', 'inst_U',
+                            'inst_E', 'ss2', 'ss3'];
         for (var i=0; i<instructions.length; ++i)
             if (!(instructions[i] in this.term))
                 this.term[instructions[i]] = function() {};
@@ -271,137 +284,143 @@
                 printed = (printed + 1) ? printed|0: i|0;
                 continue;
             }
-            transition = ((code < 0xa0) ? (this.transitions[(current_state<<8|code)|0])|0 : 16)|0;
-            switch ((transition >> 4)|0) {
-                case 2: // print
-                    printed = (printed + 1) ? printed|0: i|0;
-                    break;
-                case 3: // execute
-                    if (printed + 1) {
-                        this.term.inst_p(s.substring(printed, i));
-                        printed = -1;
-                    }
-                    this.term.inst_x(String.fromCharCode(code));
-                    break;
-                case 0: // ignore
-                    // handle leftover print and dcs chars
-                    if (printed + 1) {
-                        this.term.inst_p(s.substring(printed, i));
-                        printed = -1;
-                    } else if (dcs + 1) {
-                        this.term.inst_P(s.substring(dcs, i));
-                        dcs = -1;
-                    }
-                    break;
-                case 1: // error
-                    // handle unicode chars in write buffers w'o state change
-                    if (code > 0x9f) {
-                        switch (current_state) {
-                            case 0: // GROUND -> add char to print string
-                                printed = (!(printed+1)) ? i|0 : printed|0;
-                                break;
-                            case 8: // OSC_STRING -> add char to osc string
-                                osc += String.fromCharCode(code);
-                                transition = (transition | 8)|0;
-                                break;
-                            case 6: // CSI_IGNORE -> ignore char
-                                transition = (transition | 6)|0;
-                                break;
-                            case 11: // DCS_IGNORE -> ignore char
-                                transition = (transition | 11)|0;
-                                break;
-                            case 13: // DCS_PASSTHROUGH -> add char to dcs
-                                if (!(dcs + 1))
-                                    dcs = i|0;
-                                transition = (transition | 13)|0;
-                                break;
-                            default: // real error
-                                error = true;
-                        }
-                    } else { // real error
+            transition = ((code < 0xa0) ? (this.transitions[(current_state<<8|code)|0])|0 : 0x100)|0;
+            switch ((transition >> 8)|0) {
+            case 2: // print
+                printed = (printed + 1) ? printed|0: i|0;
+                break;
+            case 3: // execute
+                if (printed + 1) {
+                    this.term.inst_p(s.substring(printed, i));
+                    printed = -1;
+                }
+                this.term.inst_x(String.fromCharCode(code));
+                break;
+            case 0: // ignore
+                // handle leftover print and dcs chars
+                if (printed + 1) {
+                    this.term.inst_p(s.substring(printed, i));
+                    printed = -1;
+                } else if (dcs + 1) {
+                    this.term.inst_P(s.substring(dcs, i));
+                    dcs = -1;
+                }
+                break;
+            case 1: // error
+                // handle unicode chars in write buffers w'o state change
+                if (code > 0x9f) {
+                    switch (current_state) {
+                    case 0: // GROUND -> add char to print string
+                        printed = (!(printed+1)) ? i|0 : printed|0;
+                        break;
+                    case 8: // OSC_STRING -> add char to osc string
+                        osc += String.fromCharCode(code);
+                        transition = (transition | 8)|0;
+                        break;
+                    case 6: // CSI_IGNORE -> ignore char
+                        transition = (transition | 6)|0;
+                        break;
+                    case 11: // DCS_IGNORE -> ignore char
+                        transition = (transition | 11)|0;
+                        break;
+                    case 13: // DCS_PASSTHROUGH -> add char to dcs
+                        if (!(dcs + 1))
+                            dcs = i|0;
+                        transition = (transition | 13)|0;
+                        break;
+                    default: // real error
                         error = true;
                     }
-                    if (error) {
-                        if (this.term.inst_E(
-                                {
-                                    pos: i,                 // position in parse string
-                                    character: String.fromCharCode(code), // wrong character
-                                    state: current_state,   // in state
-                                    print: printed,         // print buffer
-                                    dcs: dcs,               // dcs buffer
-                                    osc: osc,               // osc buffer
-                                    collect: collected,     // collect buffer
-                                    params: params          // params buffer
-                                })) {
-                            return;
-                        }
-                        error = false;
+                } else { // real error
+                    error = true;
+                }
+                if (error) {
+                    if (this.term.inst_E(
+                        {
+                            pos: i,                 // position in parse string
+                            character: String.fromCharCode(code), // wrong character
+                            state: current_state,   // in state
+                            print: printed,         // print buffer
+                            dcs: dcs,               // dcs buffer
+                            osc: osc,               // osc buffer
+                            collect: collected,     // collect buffer
+                            params: params          // params buffer
+                        })) {
+                        return;
                     }
-                    break;
-                case 7: // csi_dispatch
-                    this.term.inst_c(collected, params, String.fromCharCode(code));
-                    break;
-                case 8: // param
-                    if (code === 0x3b)
-                        params.push(0);
-                    else
-                        params[params.length-1] = (params[params.length-1] * 10 + code - 48)|0;
-                    break;
-                case 9: // collect
-                    collected += String.fromCharCode(code);
-                    break;
-                case 10: // esc_dispatch
-                    this.term.inst_e(collected, String.fromCharCode(code));
-                    break;
-                case 11: // clear
-                    if (printed + 1) {
-                        this.term.inst_p(s.substring(printed, i));
-                        printed = -1;
-                    }
-                    osc = '';
-                    params = [0];
-                    collected = '';
-                    dcs = -1;
-                    break;
-                case 12: // dcs_hook
-                    this.term.inst_H(collected, params, String.fromCharCode(code));
-                    break;
-                case 13: // dcs_put
-                    if (!(dcs + 1))
-                        dcs = i|0;
-                    break;
-                case 14: // dcs_unhook
-                    if (dcs + 1) {
-                        this.term.inst_P(s.substring(dcs, i));
-                    }
-                    this.term.inst_U();
-                    if (code === 0x1b)
-                        transition = (transition | 1)|0;
-                    osc = '';
-                    params = [0];
-                    collected = '';
-                    dcs = -1;
-                    break;
-                case 4: // osc_start
-                    if (~printed) {
-                        this.term.inst_p(s.substring(printed, i));
-                        printed = -1;
-                    }
-                    osc = '';
-                    break;
-                case 5: // osc_put
-                    osc += s.charAt(i);
-                    break;
-                case 6: // osc_end
-                    if (osc && code !== 0x18 && code !== 0x1a)
-                        this.term.inst_o(osc);
-                    if (code === 0x1b)
-                        transition = (transition | 1)|0;
-                    osc = '';
-                    params = [0];
-                    collected = '';
-                    dcs = -1;
-                    break;
+                    error = false;
+                }
+                break;
+            case 7: // csi_dispatch
+                this.term.inst_c(collected, params, String.fromCharCode(code));
+                break;
+            case 8: // param
+                if (code === 0x3b)
+                    params.push(0);
+                else
+                    params[params.length-1] = (params[params.length-1] * 10 + code - 48)|0;
+                break;
+            case 9: // collect
+                collected += String.fromCharCode(code);
+                break;
+            case 10: // esc_dispatch
+                this.term.inst_e(collected, String.fromCharCode(code));
+                break;
+            case 11: // clear
+                if (printed + 1) {
+                    this.term.inst_p(s.substring(printed, i));
+                    printed = -1;
+                }
+                osc = '';
+                params = [0];
+                collected = '';
+                dcs = -1;
+                break;
+            case 12: // dcs_hook
+                this.term.inst_H(collected, params, String.fromCharCode(code));
+                break;
+            case 13: // dcs_put
+                if (!(dcs + 1))
+                    dcs = i|0;
+                break;
+            case 14: // dcs_unhook
+                if (dcs + 1) {
+                    this.term.inst_P(s.substring(dcs, i));
+                }
+                this.term.inst_U();
+                if (code === 0x1b)
+                    transition = (transition | 1)|0;
+                osc = '';
+                params = [0];
+                collected = '';
+                dcs = -1;
+                break;
+            case 15: // ss2
+                this.term.ss2(code);
+                break;
+            case 16: // ss3
+                this.term.ss3(code);
+                break;
+            case 4: // osc_start
+                if (~printed) {
+                    this.term.inst_p(s.substring(printed, i));
+                    printed = -1;
+                }
+                osc = '';
+                break;
+            case 5: // osc_put
+                osc += s.charAt(i);
+                break;
+            case 6: // osc_end
+                if (osc && code !== 0x18 && code !== 0x1a)
+                    this.term.inst_o(osc);
+                if (code === 0x1b)
+                    transition = (transition | 1)|0;
+                osc = '';
+                params = [0];
+                collected = '';
+                dcs = -1;
+                break;
             }
             current_state = (transition & 15)|0;
         }
