@@ -327,7 +327,8 @@ describe('state transitions and actions', function() {
     });
     it('trans CSI_ENTRY --> GROUND with csi_dispatch action', function () {
         parser.reset();
-        var dispatches = r(0x40, 0x7f);
+        var dispatches = r(0x40, 0x4c);
+        dispatches.concat(r(0x4e, 0x7f));
         for (var i=0; i<dispatches.length; ++i) {
             parser.current_state = 3;
             parser.parse(dispatches[i]);
@@ -1060,6 +1061,11 @@ describe('Input parsing', function() {
             ['ss3', 66],
             ['ss3', 66]
         ]);
+    });
 
+    it('mouse event', function() {
+        test("\x1b[M a>", [
+            ['csi', 'M', [0, 65, 30], '']
+        ]);
     });
 });

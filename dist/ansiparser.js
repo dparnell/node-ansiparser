@@ -66,7 +66,8 @@
        'DCS_INTERMEDIATE',
        'DCS_PASSTHROUGH',
        'SS2',
-       'SS3'
+       'SS3',
+       'MOUSE',
        ];
 
        var ACTIONS = [
@@ -86,7 +87,9 @@
        'dcs_put',
        'dcs_unhook',
        'ss2',
-       'ss3'
+       'ss3',
+       'mouse',
+       'mouse_param'
        ];
     */
 
@@ -101,10 +104,10 @@
      *     - any higher character than 159 is handled by the 'error' action
      */
     var TRANSITION_TABLE = (function() {
-        var t = new Uint16Array(4095);
+        var t = new Uint16Array(0xffff);
 
         // table with default transition [any] --> [error, GROUND]
-        for (var state=0; state<16; ++state) {
+        for (var state=0; state<18; ++state) {
             for (var code=0; code<160; ++code) {
                 t[state<<8|code] = 0x100;
             }
@@ -170,6 +173,11 @@
         add_list(t, r(0x30, 0x40), 5, 0, 6);
         add_list(t, r(0x40, 0x7f), 5, 7, 0);
         add_list(t, r(0x20, 0x30), 4, 9, 5);
+        add(t, 77, 3, 17, 16); // mouse sequence start
+
+        // mouse params
+        add_list(t, PRINTABLES, 16, 18);
+
         // esc_intermediate
         add_list(t, r(0x20, 0x30), 1, 9, 2);
         add_list(t, r(0x20, 0x30), 2, 9);
@@ -231,7 +239,7 @@
         this.current_state = this.initial_state|0;
 
         // clone global transition table
-        this.transitions = new Uint16Array(4095);
+        this.transitions = new Uint16Array(0xffff);
         this.transitions.set(TRANSITION_TABLE);
 
         // global non pushable buffers for multiple parse invocations
@@ -285,6 +293,7 @@
                 continue;
             }
             transition = ((code < 0xa0) ? (this.transitions[(current_state<<8|code)|0])|0 : 0x100)|0;
+            // console.info(i, current_state, code, (current_state<<8|code)|0, transition, transition >> 8);
             switch ((transition >> 8)|0) {
             case 2: // print
                 printed = (printed + 1) ? printed|0: i|0;
@@ -401,6 +410,16 @@
             case 16: // ss3
                 this.term.ss3(code);
                 break;
+            case 17: // mouse start
+                params = [];
+                break;
+            case 18:
+                params.push(code - 0x20);
+                if(params.length === 3) {
+                    transition = 0;
+                    this.term.inst_c('M', params, '');
+                }
+                break;
             case 4: // osc_start
                 if (~printed) {
                     this.term.inst_p(s.substring(printed, i));
@@ -422,7 +441,7 @@
                 dcs = -1;
                 break;
             }
-            current_state = (transition & 15)|0;
+            current_state = (transition & 0xff)|0;
         }
 
         // push leftover pushable buffers to terminal
